@@ -11,6 +11,22 @@ import (
 	"github.com/HollowKaeden/http-loadgen/internal/stats"
 )
 
+// worker тянет задания из jobs и на каждое делает один запрос, складывая исход в
+// results. Заданием служит пустая структура: важен сам факт "сделай ещё запрос", а
+// не его содержимое. Цикл заканчивается, когда jobs закрыт (работа кончилась) или
+// отменён ctx. Проверку ctx делаем перед запросом, чтобы после отмены не начинать
+// новую работу; уже летящий запрос обрывает сам ctx внутри doRequest.
+func worker(ctx context.Context, client *http.Client, cfg *config.Config, jobs <-chan struct{}, results chan<- stats.Result) {
+	for range jobs {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		results <- doRequest(ctx, client, cfg)
+	}
+}
+
 // newClient собирает единственный http.Client на весь прогон. Все воркеры делят
 // один клиент, поэтому Transport надо настроить с запасом idle-коннектов на хост.
 // Иначе на каждый запрос пересоздавалось бы TCP-соединение, и мы мерили бы не
