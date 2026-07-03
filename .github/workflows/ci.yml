@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Отменяем предыдущий прогон на той же ветке/PR, если пришёл новый пуш:
+# гонять устаревший коммит смысла нет, только жжём минуты.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Версию берём из go.mod, чтобы CI и локальная сборка не разъезжались.
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      # -race ловит гонки, которых у нас нет by design (агрегатор один). Тест это
+      # проверяет, а не постулирует. На Linux-раннере race работает из коробки.
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: go build ./cmd/loadgen
