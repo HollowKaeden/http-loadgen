@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 
 	"github.com/HollowKaeden/http-loadgen/internal/config"
 	"github.com/HollowKaeden/http-loadgen/internal/runner"
@@ -22,7 +23,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := runner.Run(context.Background(), cfg); err != nil {
+	// SIGINT (Ctrl+C) отменяет ctx: продюсер перестаёт раздавать работу, а летящие
+	// запросы обрываются. Так Ctrl+C мягко останавливает прогон без паники.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := runner.Run(ctx, cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
 		os.Exit(1)
 	}

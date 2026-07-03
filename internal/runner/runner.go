@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/HollowKaeden/http-loadgen/internal/config"
 	"github.com/HollowKaeden/http-loadgen/internal/stats"
@@ -17,18 +18,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	jobs := make(chan struct{})
 	results := make(chan stats.Result, cfg.Concurrency)
 
-	// Продюсер раздаёт ровно cfg.Requests заданий и закрывает jobs. Закрытие канала
-	// это сигнал всем воркерам, что работа кончилась. Отмена ctx обрывает раздачу.
-	go func() {
-		defer close(jobs)
-		for i := 0; i < cfg.Requests; i++ {
-			select {
-			case <-ctx.Done():
-				return
-			case jobs <- struct{}{}:
-			}
-		}
-	}()
+	go produce(ctx, cfg, jobs)
 
 	var wg sync.WaitGroup
 	wg.Add(cfg.Concurrency)
@@ -60,4 +50,34 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	fmt.Printf("total=%d ok=%d failed=%d\n", total, ok, failed)
 	return nil
+}
+
+// produce раздаёт задания воркерам и закрывает jobs, когда работа кончилась.
+// Форма остановки зависит от режима:
+//
+//	-n: раздать ровно cfg.Requests заданий.
+//	-d: раздавать, пока не истечёт cfg.Duration.
+func produce(ctx context.Context, cfg *config.Config, jobs chan<- struct{}) {
+	defer close(jobs)
+
+	if cfg.DurationSet {
+		deadline := time.After(cfg.Duration)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-deadline:
+				return
+			case jobs <- struct{}{}:
+			}
+		}
+	}
+
+	for i := 0; i < cfg.Requests; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case jobs <- struct{}{}:
+		}
+	}
 }
