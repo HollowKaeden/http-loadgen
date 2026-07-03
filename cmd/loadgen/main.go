@@ -49,6 +49,12 @@ func printSummary(s stats.Stats) {
 		fmt.Printf("elapsed=%s rps=%.1f\n", s.Elapsed.Round(time.Millisecond), rps)
 	}
 
+	if len(s.Latencies) > 0 {
+		l := stats.Summarize(s.Latencies)
+		fmt.Printf("latency: min=%s p50=%s p95=%s p99=%s max=%s\n",
+			round(l.Min), round(l.P50), round(l.P95), round(l.P99), round(l.Max))
+	}
+
 	if len(s.ByStatus) > 0 {
 		fmt.Print("by status:")
 		for _, code := range sortedIntKeys(s.ByStatus) {
@@ -64,6 +70,12 @@ func printSummary(s stats.Stats) {
 		}
 		fmt.Println()
 	}
+}
+
+// round укорачивает латентность до микросекунд: наносекундный хвост в отчёте лишний,
+// он только зашумляет числа и не несёт смысла на сетевых временах.
+func round(d time.Duration) time.Duration {
+	return d.Round(time.Microsecond)
 }
 
 func sortedIntKeys(m map[int]int) []int {
