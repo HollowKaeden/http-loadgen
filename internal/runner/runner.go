@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -12,12 +11,14 @@ import (
 
 // Run поднимает пул из cfg.Concurrency воркеров и раздаёт им работу через канал
 // jobs. Воркеры шлют исходы в results, откуда мы их пока считаем прямо здесь.
-func Run(ctx context.Context, cfg *config.Config) error {
+func Run(ctx context.Context, cfg *config.Config) (stats.Stats, error) {
 	client := newClient(cfg)
 
 	jobs := make(chan struct{})
 	results := make(chan stats.Result, cfg.Concurrency)
 
+	// Засекаем время именно вокруг раздачи и обработки запросов: это знаменатель RPS.
+	start := time.Now()
 	go produce(ctx, cfg, jobs)
 
 	var wg sync.WaitGroup
@@ -38,18 +39,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		close(results)
 	}()
 
-	var total, ok, failed int
-	for res := range results {
-		total++
-		if res.Err == nil && res.Status >= 200 && res.Status < 300 {
-			ok++
-		} else {
-			failed++
-		}
-	}
-
-	fmt.Printf("total=%d ok=%d failed=%d\n", total, ok, failed)
-	return nil
+	// Коллектор читает results в этой горутине, пока канал не закроется. Он
+	// единственный потребитель, поэтому копит Stats без синхронизации.
+	s := stats.Collect(results)
+	s.Elapsed = time.Since(start)
+	return s, nil
 }
 
 // produce раздаёт задания воркерам и закрывает jobs, когда работа кончилась.
