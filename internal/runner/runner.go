@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/HollowKaeden/http-loadgen/internal/config"
 	"github.com/HollowKaeden/http-loadgen/internal/stats"
 )
@@ -17,9 +19,20 @@ func Run(ctx context.Context, cfg *config.Config) (stats.Stats, error) {
 	jobs := make(chan struct{})
 	results := make(chan stats.Result, cfg.Concurrency)
 
+	// Продюсеру даём отдельный ctx: в режиме -d он живёт ровно cfg.Duration и по
+	// истечении сам останавливает раздачу. Воркеры при этом работают на исходном ctx,
+	// поэтому летящие на момент дедлайна запросы спокойно дожимаются, а не рвутся.
+	// SIGINT отменяет исходный ctx, а с ним и производный, так что Ctrl+C тормозит обоих.
+	produceCtx := ctx
+	if cfg.DurationSet {
+		var cancel context.CancelFunc
+		produceCtx, cancel = context.WithTimeout(ctx, cfg.Duration)
+		defer cancel()
+	}
+
 	// Засекаем время именно вокруг раздачи и обработки запросов: это знаменатель RPS.
 	start := time.Now()
-	go produce(ctx, cfg, jobs)
+	go produce(produceCtx, cfg, jobs)
 
 	var wg sync.WaitGroup
 	wg.Add(cfg.Concurrency)
@@ -50,28 +63,47 @@ func Run(ctx context.Context, cfg *config.Config) (stats.Stats, error) {
 // Форма остановки зависит от режима:
 //
 //	-n: раздать ровно cfg.Requests заданий.
-//	-d: раздавать, пока не истечёт cfg.Duration.
+//	-d: раздавать, пока ctx жив (ctx уже ограничен cfg.Duration в Run).
+//
+// Если задан -rps, работаем в open-loop: перед каждой выдачей ждём токен лимитера,
+// то есть держим темп cfg.RPS запросов/сек независимо от того, как быстро отвечает
+// сервер. Без -rps лимитера нет, и темп задают сами воркеры (closed-loop).
 func produce(ctx context.Context, cfg *config.Config, jobs chan<- struct{}) {
 	defer close(jobs)
 
-	if cfg.DurationSet {
-		deadline := time.After(cfg.Duration)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-deadline:
-				return
-			case jobs <- struct{}{}:
+	var limiter *rate.Limiter
+	if cfg.RPS > 0 {
+		// Burst 1 держит выдачу равномерной: токены не копятся, поэтому после паузы
+		// продюсер не выстреливает пачкой, а возвращается к ровному шагу 1/RPS.
+		limiter = rate.NewLimiter(rate.Limit(cfg.RPS), 1)
+	}
+
+	// send выдаёт одно задание. Возвращает false, если ctx отменён (истёк -d или
+	// пришёл SIGINT) или воркеры не разбирают задания до отмены. И ожидание токена,
+	// и сама передача в канал прерываются по ctx, поэтому produce не залипает.
+	send := func() bool {
+		if limiter != nil {
+			if err := limiter.Wait(ctx); err != nil {
+				return false
 			}
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case jobs <- struct{}{}:
+			return true
 		}
 	}
 
+	if cfg.DurationSet {
+		for send() {
+		}
+		return
+	}
+
 	for i := 0; i < cfg.Requests; i++ {
-		select {
-		case <-ctx.Done():
+		if !send() {
 			return
-		case jobs <- struct{}{}:
 		}
 	}
 }

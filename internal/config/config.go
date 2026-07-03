@@ -25,6 +25,7 @@ type Config struct {
 	Body        string        // -body, тело запроса (уже с раскрытым @file)
 	Headers     http.Header   // -H, повторяемый флаг
 	JSON        bool          // -json, машиночитаемый вывод
+	RPS         int           // -rps, целевая скорость open-loop (0 => closed-loop)
 
 	// DurationSet/RequestsSet запоминают, был ли флаг реально указан пользователем.
 	// Так мы отличаем "-n 0" от "-n вообще не передан", без этого не проверить
@@ -96,6 +97,7 @@ func Parse(args []string, output io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.Method, "method", http.MethodGet, "HTTP-метод")
 	fs.StringVar(&cfg.Body, "body", "", "тело запроса; @file читает тело из файла")
 	fs.BoolVar(&cfg.JSON, "json", false, "вывести отчёт в JSON")
+	fs.IntVar(&cfg.RPS, "rps", 0, "open-loop: целевая скорость запросов/сек (0 = closed-loop)")
 	fs.Var(headers, "H", "заголовок \"Key: Value\", можно повторять")
 
 	if err := fs.Parse(args); err != nil {
@@ -149,6 +151,9 @@ func (c *Config) validate() error {
 	}
 	if c.Timeout <= 0 {
 		return fmt.Errorf("-timeout должен быть > 0, получено %s", c.Timeout)
+	}
+	if c.RPS < 0 {
+		return fmt.Errorf("-rps должен быть >= 0, получено %d", c.RPS)
 	}
 
 	// Ровно один из -n / -d.

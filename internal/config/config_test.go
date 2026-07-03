@@ -31,6 +31,7 @@ func TestParseInvalid(t *testing.T) {
 		"n <= 0":           {"-url", "http://x", "-n", "0"},
 		"плохой метод":     {"-url", "http://x", "-n", "10", "-method", "FETCH"},
 		"timeout <= 0":     {"-url", "http://x", "-n", "10", "-timeout", "0"},
+		"rps < 0":          {"-url", "http://x", "-n", "10", "-rps", "-1"},
 		"кривой заголовок": {"-url", "http://x", "-n", "10", "-H", "нет двоеточия"},
 	}
 	for name, args := range cases {

@@ -94,6 +94,43 @@ func TestRunRecordsFailedStatuses(t *testing.T) {
 	}
 }
 
+// open-loop с -rps держит темп: даже против мгновенного сервера прогон не может
+// закончиться быстрее, чем лимитер выдаёт токены. Проверяем нижнюю границу времени
+// (она зависит только от rate, поэтому тест не флакует): closed-loop против такого
+// сервера уложился бы в миллисекунды, а тут обязан растянуться.
+func TestRunOpenLoopRateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	const rps, requests = 200, 50
+	cfg := &config.Config{
+		URL:         srv.URL,
+		Concurrency: 10,
+		Requests:    requests,
+		RequestsSet: true,
+		RPS:         rps,
+		Timeout:     5 * time.Second,
+		Method:      http.MethodGet,
+	}
+
+	s, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run вернул ошибку: %v", err)
+	}
+
+	if s.Total != requests || s.OK != requests {
+		t.Errorf("Total/OK = %d/%d, хотели %d/%d", s.Total, s.OK, requests, requests)
+	}
+	// burst 1: после первого токена ждём (N-1) интервалов по 1/rps. Берём заведомо
+	// заниженную границу, чтобы не ловить дрожание планировщика.
+	minElapsed := time.Duration(requests-1) * time.Second / rps / 2
+	if s.Elapsed < minElapsed {
+		t.Errorf("Elapsed = %s, при rps=%d ожидали хотя бы %s", s.Elapsed, rps, minElapsed)
+	}
+}
+
 // отмена ctx обязана прервать летящий запрос, а не ждать его. Хендлер блокируется до
 // отмены запроса, поэтому если бы отмена не пробрасывалась, Run завис бы и тест упал
 // по дедлайну (клиентский timeout выставлен заведомо больше дедлайна теста).
