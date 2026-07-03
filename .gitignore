@@ -1,0 +1,36 @@
+# Скомпилированные бинарники
+/loadgen
+/loadgen.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Тестовые бинарники и покрытие
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace / кэш
+go.work
+go.work.sum
+/vendor/
+
+# Артефакты сборки
+/bin/
+/dist/
+
+# IDE / редакторы
+.idea/
+.vscode/
+CLAUDE.md
+*.swp
+*~
+
+# ОС
+.DS_Store
+Thumbs.db
+
+# Логи и локальные тела запросов
+*.log
