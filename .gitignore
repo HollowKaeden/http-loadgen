@@ -21,6 +21,9 @@ go.work.sum
 /bin/
 /dist/
 
+# Локальный dev-сервер для ручных прогонов
+/_devserver/
+
 # IDE / редакторы
 .idea/
 .vscode/

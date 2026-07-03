@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 
 	"github.com/HollowKaeden/http-loadgen/internal/config"
+	"github.com/HollowKaeden/http-loadgen/internal/runner"
 )
 
 func main() {
@@ -20,5 +22,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	fmt.Printf("config OK: %+v\n", cfg)
+	if err := runner.Run(context.Background(), cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "ошибка:", err)
+		os.Exit(1)
+	}
 }
