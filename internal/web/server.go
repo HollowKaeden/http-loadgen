@@ -55,6 +55,7 @@ type targetsResponse struct {
 
 func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 	resp := targetsResponse{
+		Targets:      []targetView{}, // пустой список, а не null: форме проще
 		MinShare:     s.sched.settings.MinShare,
 		MaxShare:     s.sched.settings.MaxShare,
 		MaxDurationS: int(s.sched.settings.MaxDuration.Seconds()),
