@@ -3,6 +3,10 @@
 // смотрит метрики вживую. CLI (cmd/loadgen) остаётся отдельным и не меняется.
 //
 //	loadgen-web serve      поднять API (по умолчанию)
+//	loadgen-web calibrate  измерить max_rps целей и записать его в файл целей
+//
+// Калибровку запускают вручную на том же сервере, где живут цели, в тихое время:
+// так в max_rps уже учтено, что генератор делит с целями одно ядро.
 package main
 
 import (
@@ -31,8 +35,10 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = serve(args)
+	case "calibrate":
+		err = calibrate(args)
 	default:
-		err = fmt.Errorf("неизвестная команда %q (есть: serve)", cmd)
+		err = fmt.Errorf("неизвестная команда %q (есть: serve, calibrate)", cmd)
 	}
 	if err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
@@ -116,4 +122,60 @@ func serve(args []string) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+func calibrate(args []string) error {
+	fs := flag.NewFlagSet("calibrate", flag.ContinueOnError)
+	targetsPath := fs.String("targets", env("TARGETS", "targets.json"), "файл целей; max_rps записывается в него же")
+	domain := fs.String("domain", env("DOMAIN", ""), "домен, подставляется вместо {domain} в целях")
+	only := fs.String("only", "", "калибровать только цель с этим id")
+	dryRun := fs.Bool("dry-run", false, "только напечатать результат, файл не менять")
+	o := web.CalibrateOptions{MinAchieved: 0.9, MaxWorkers: 512, Timeout: 5 * time.Second}
+	fs.IntVar(&o.StartRPS, "start", 10, "первая ступень, rps")
+	fs.Float64Var(&o.Factor, "factor", 1.25, "рост ступени")
+	fs.IntVar(&o.MaxRPS, "max", 2000, "выше этого rps не идём")
+	fs.DurationVar(&o.Step, "step", 10*time.Second, "длительность ступени")
+	fs.DurationVar(&o.Pause, "pause", 5*time.Second, "пауза между ступенями")
+	fs.DurationVar(&o.MaxP99, "max-p99", 500*time.Millisecond, "порог p99")
+	fs.Float64Var(&o.MaxErrorRate, "max-errors", 0.01, "порог доли ошибок")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if o.StartRPS < 1 || o.Factor <= 1 || o.MaxRPS < o.StartRPS {
+		return errors.New("нужно start >= 1, factor > 1, max >= start")
+	}
+
+	targets, err := web.LoadTargets(*targetsPath, *domain)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	found := false
+	for i, tg := range targets.Targets {
+		if *only != "" && tg.ID != *only {
+			continue
+		}
+		found = true
+		got, err := web.Calibrate(ctx, tg, o, os.Stdout)
+		if err != nil {
+			return fmt.Errorf("калибровка %s: %w", tg.ID, err)
+		}
+		targets.Targets[i].MaxRPS = got
+	}
+	if !found {
+		return fmt.Errorf("цель %q не найдена", *only)
+	}
+
+	if *dryRun {
+		fmt.Println("\n-dry-run: файл не изменён")
+		return nil
+	}
+	if err := targets.Save(*targetsPath, *domain); err != nil {
+		return err
+	}
+	fmt.Println("\nзаписано в", *targetsPath)
+	return nil
 }
