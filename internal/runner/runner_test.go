@@ -173,3 +173,85 @@ func TestRunCancelAbortsInflight(t *testing.T) {
 		t.Fatal("Run не вернулся после отмены: летящий запрос не прервался")
 	}
 }
+
+// RunLive режет прогон на окна: сумма запросов по окнам совпадает с итогом, а номера
+// окон идут подряд. Режим -n, чтобы итог был детерминированным.
+func TestRunLiveWindowsSumToTotal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		URL:         srv.URL,
+		Concurrency: 4,
+		Requests:    60,
+		RequestsSet: true,
+		RPS:         200, // растягиваем прогон на ~0.3 с, чтобы окон было несколько
+		Timeout:     5 * time.Second,
+		Method:      http.MethodGet,
+	}
+
+	var windows []stats.Window
+	s, err := RunLive(context.Background(), cfg, 50*time.Millisecond, func(w stats.Window) {
+		windows = append(windows, w)
+	})
+	if err != nil {
+		t.Fatalf("RunLive вернул ошибку: %v", err)
+	}
+
+	sum := 0
+	for i, w := range windows {
+		if w.Index != i {
+			t.Errorf("окно %d имеет Index %d", i, w.Index)
+		}
+		sum += w.Total
+	}
+	if sum != s.Total || s.Total != 60 {
+		t.Errorf("сумма по окнам %d, итог %d, хотели 60 и 60", sum, s.Total)
+	}
+	if len(windows) < 2 {
+		t.Errorf("окон %d, при ~0.3 с и интервале 50 мс ожидали несколько", len(windows))
+	}
+}
+
+// Так работает аварийный тормоз веб-формы: решение принимается в колбэке окна, и
+// отмена ctx оттуда же останавливает прогон задолго до -d.
+func TestRunLiveCancelFromWindow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		URL:         srv.URL,
+		Concurrency: 2,
+		Duration:    30 * time.Second,
+		DurationSet: true,
+		RPS:         100,
+		Timeout:     5 * time.Second,
+		Method:      http.MethodGet,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan stats.Stats, 1)
+	go func() {
+		s, _ := RunLive(ctx, cfg, 50*time.Millisecond, func(w stats.Window) {
+			if w.Total > 0 && w.ErrorRate() > 0.5 {
+				cancel()
+			}
+		})
+		done <- s
+	}()
+
+	select {
+	case s := <-done:
+		if s.Elapsed >= cfg.Duration {
+			t.Errorf("прогон шёл %s, тормоз должен был остановить его раньше %s", s.Elapsed, cfg.Duration)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunLive не остановился после отмены из колбэка окна")
+	}
+}

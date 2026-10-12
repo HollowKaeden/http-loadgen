@@ -14,6 +14,14 @@ import (
 // Run поднимает пул из cfg.Concurrency воркеров и раздаёт им работу через канал
 // jobs. Воркеры шлют исходы в results, откуда мы их пока считаем прямо здесь.
 func Run(ctx context.Context, cfg *config.Config) (stats.Stats, error) {
+	return RunLive(ctx, cfg, 0, nil)
+}
+
+// RunLive это Run, который вдобавок раз в interval отдаёт в onWindow метрики за
+// прошедший интервал (см. stats.CollectLive). Нужен веб-сервису: живой график и
+// аварийный тормоз. Остановить прогон досрочно можно, отменив ctx прямо из onWindow.
+// С onWindow == nil это ровно Run, поэтому CLI работает как раньше.
+func RunLive(ctx context.Context, cfg *config.Config, interval time.Duration, onWindow func(stats.Window)) (stats.Stats, error) {
 	client := newClient(cfg)
 
 	jobs := make(chan struct{})
@@ -54,7 +62,12 @@ func Run(ctx context.Context, cfg *config.Config) (stats.Stats, error) {
 
 	// Коллектор читает results в этой горутине, пока канал не закроется. Он
 	// единственный потребитель, поэтому копит Stats без синхронизации.
-	s := stats.Collect(results)
+	var s stats.Stats
+	if onWindow != nil {
+		s = stats.CollectLive(results, interval, onWindow)
+	} else {
+		s = stats.Collect(results)
+	}
 	s.Elapsed = time.Since(start)
 	return s, nil
 }
