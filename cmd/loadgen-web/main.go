@@ -91,7 +91,7 @@ func serve(args []string) error {
 		MaxShare:       50,
 		MaxWorkers:     64,
 		RequestTimeout: 5 * time.Second,
-		IPLimit:        2,
+		IPLimit:        3,
 		IPWindow:       15 * time.Minute,
 		AbandonAfter:   5 * time.Second,
 		Brake: web.Brake{
