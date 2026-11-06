@@ -129,6 +129,11 @@ func (s *Scheduler) Start(targetID string, share, durationS int, ip string) (*Ru
 	if durationS < 1 || durationS > maxS {
 		return nil, fmt.Errorf("длительность должна быть от 1 до %d с", maxS)
 	}
+	// Округление вверх могло превратить 50% от 9 RPS в 5 RPS.
+	rps := max(1, int(math.Floor(float64(tg.MaxRPS)*float64(share)/100)))
+	if float64(rps) > float64(tg.MaxRPS)*float64(s.settings.MaxShare)/100 {
+		return nil, fmt.Errorf("цель %q слишком медленная: даже 1 запрос/с превышает потолок %d%%", targetID, s.settings.MaxShare)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,8 +152,6 @@ func (s *Scheduler) Start(targetID string, share, durationS int, ip string) (*Ru
 		}
 	}
 
-	rps := int(math.Round(float64(tg.MaxRPS) * float64(share) / 100))
-	rps = max(rps, 1)
 	ctx, cancel := context.WithCancel(s.baseCtx)
 	r := &Run{
 		ID:        newID(),

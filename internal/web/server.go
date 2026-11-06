@@ -61,8 +61,8 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 		MaxDurationS: int(s.sched.settings.MaxDuration.Seconds()),
 	}
 	for _, t := range s.sched.targets.Targets {
-		// неоткалиброванные цели форме не показываем
-		if t.MaxRPS > 0 {
+		// Не показываем цели, для которых даже минимальный 1 RPS выше потолка.
+		if float64(t.MaxRPS)*float64(s.sched.settings.MaxShare)/100 >= 1 {
 			resp.Targets = append(resp.Targets, targetView{ID: t.ID, Title: t.Title, MaxRPS: t.MaxRPS})
 		}
 	}

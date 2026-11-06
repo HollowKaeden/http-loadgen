@@ -70,6 +70,60 @@ func newTestScheduler(t *testing.T, handler http.HandlerFunc, settings Settings)
 
 func okHandler(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
+// Нечётный максимум нельзя округлить вверх за потолок нагрузки.
+func TestSchedulerRoundsRateDown(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		maximum, share, want int
+	}{
+		{"odd-small", 7, 50, 3},
+		{"recipes", 9, 50, 4},
+		{"portfolio", 247, 50, 123},
+		{"books", 38, 50, 19},
+		{"fraction", 38, 25, 9},
+		{"minimum-rate", 9, 10, 1},
+		{"smallest-target", 2, 10, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestScheduler(t, okHandler, testSettings())
+			s.targets.Targets[0].MaxRPS = tc.maximum
+			r, err := s.Start("ok", tc.share, 1, "127.0.0.1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.cancel()
+			waitDone(t, r, false)
+			if r.RPS != tc.want || r.RPS*100 > tc.maximum*s.settings.MaxShare {
+				t.Fatalf("max=%d share=%d: RPS=%d, want %d within %d%%", tc.maximum, tc.share, r.RPS, tc.want, s.settings.MaxShare)
+			}
+		})
+	}
+}
+
+// Если даже 1 RPS превышает потолок, цель не показывается и прогон не занимает слот.
+func TestSchedulerRejectsTargetBelowMinimumRate(t *testing.T) {
+	for _, tc := range []struct{ maximum, maxShare int }{{1, 50}, {4, 20}} {
+		s, _ := newTestScheduler(t, okHandler, testSettings())
+		s.settings.MaxShare = tc.maxShare
+		s.targets.Targets[0].MaxRPS = tc.maximum
+		if _, err := s.Start("ok", tc.maxShare, 1, "127.0.0.1"); err == nil {
+			t.Fatalf("max=%d share=%d: expected rejection", tc.maximum, tc.maxShare)
+		}
+		if s.Status().Running || len(s.byIP) != 0 {
+			t.Fatal("rejected run occupied a slot")
+		}
+		rec := httptest.NewRecorder()
+		NewServer(s, "").Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/targets", nil))
+		var targets targetsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &targets); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != http.StatusOK || len(targets.Targets) != 0 {
+			t.Fatalf("unusable target exposed: %s", rec.Body.String())
+		}
+	}
+}
+
 // waitDone ждёт конца прогона и возвращает итог. С watch=true держит зрителя, чтобы
 // прогон не отменился как брошенный.
 func waitDone(t *testing.T, r *Run, watch bool) doneEvent {
